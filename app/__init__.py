@@ -474,7 +474,7 @@
 #
 # print("=== DEBUG: app/__init__.py loaded successfully ===")
 
-
+#服務啟動，但有問題
 import os
 import sys
 
