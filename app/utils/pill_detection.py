@@ -281,6 +281,7 @@
 # 以下SHAN
 # pill_detection.py  — 無 rembg 版本（YOLO → 顏色/外型 → OCR）
 
+# Rushi
 import os
 import base64
 import logging
@@ -288,6 +289,7 @@ import cv2
 import torch
 import numpy as np
 from ultralytics import YOLO
+import colorsys
 
 from app.utils.image_io import read_image_safely
 from openocr import OpenOCR
@@ -297,9 +299,8 @@ from app.utils.shape_color_utils import (
     enhance_contrast,
     desaturate_image,
     enhance_for_blur,
-    get_basic_color_name,
-    get_dominant_colors,
-    detect_shape_from_image,
+    detect_shape_and_extract_colors, # new combined function
+    detect_shape_from_image, # if want the separate option for color and shape
     increase_brightness,
     get_center_region,
 )
@@ -524,9 +525,12 @@ def process_image(img_path: str):
         if ok else None
     )
 
-    # === 外型、顏色分析（直接用裁切圖，不去背） ===
-    shape, _ = detect_shape_from_image(cropped, cropped, expected_shape=None)
-
+    # === Combined Shape & Color Analysis (HSV-based) ===
+    # Convert RGB to BGR for OpenCV processing
+    cropped_bgr = cv2.cvtColor(cropped, cv2.COLOR_RGB2BGR)
+    shape, colors, hsv_avg, method = detect_shape_and_extract_colors(
+        cropped_bgr, cropped_bgr, debug=False
+    )
 
     # === 多版本 OCR 辨識 ===
     image_versions = generate_image_versions(cropped)
@@ -534,19 +538,7 @@ def process_image(img_path: str):
     best_texts, best_name, best_score = get_best_ocr_texts(
         image_versions, ocr_engine=ocr_engine
     )
-    # === 中央區域顏色分析 ===
-    cropped2 = get_center_region(cropped.copy(), size=100)
-    rgb_colors, hex_colors = get_dominant_colors(cropped2, k=3, min_ratio=0.30)
-    rgb_colors_int = [tuple(map(int, c)) for c in rgb_colors]
 
-    basic_names, hsv_values = [], []
-    for rgb in rgb_colors_int:
-        bgr = np.uint8([[rgb[::-1]]])
-        h_raw, s, v = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[0][0]
-        hsv_values.append((h_raw * 2, s, v))
-        basic_names.append(get_basic_color_name(rgb))
-
-    colors = list(dict.fromkeys(basic_names))
 
 
     print(f"[PROC] OCR={best_texts}, shape={shape}, colors={colors}, score={best_score:.3f}")

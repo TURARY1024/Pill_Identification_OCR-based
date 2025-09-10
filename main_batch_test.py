@@ -8,6 +8,7 @@ from pathlib import Path
 from collections import defaultdict
 
 import cv2
+import colorsys # for color recognition by Rushi
 
 import app.utils.shape_color_utils as scu
 import datetime
@@ -22,11 +23,11 @@ from app.utils.pill_detection import (
 )
 from app.utils.image_io import read_image_safely
 from app.utils.shape_color_utils import (
-    # extract_dominant_colors_by_ratio
-    get_basic_color_name,
-    get_dominant_colors,
-    detect_shape_from_image
+    extract_pill_colors_hsv,
+    detect_shape_and_extract_colors,
+    detect_shape_from_image  # Keep this if you want to use separate shape detection
 )
+
 # OCR helpers (use pill_detection’s OpenOCR engine & version generator)
 import app.utils.pill_detection as P  # gives access to generate_image_versions, get_best_ocr_texts, ocr_engine
 
@@ -34,10 +35,10 @@ import app.utils.pill_detection as P  # gives access to generate_image_versions,
 # Excel with ground-truth
 DEFAULT_EXCEL = Path("data/TESTData.xlsx")
 # Root that contains subfolders per drug (named by 學名, “/” replaced by space)
-DEFAULT_IMAGES_ROOT = Path(r"C:\Users\92102\OneDrive - NTHU\桌面\大三下\畢業專題\drug_photos")
+DEFAULT_IMAGES_ROOT = Path(r"Pill_Identification_OCR-based-main\昂格莎Saxagliptin  5mg-tab")
 # Evaluation range (用量排序)
 DEFAULT_START = 1
-DEFAULT_END = 402
+DEFAULT_END = 1
 # Where to write the summary workbook
 DEFAULT_REPORT_XLSX = Path("reports/藥物辨識成功率總表.xlsx")
 DEFAULT_REPORT_XLSX.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +144,7 @@ def _run_single_image(img_path: Path, det_model, exp_shape=None, enable_fallback
         yolo_ok = True
     else:
         # 降低 conf 再試一次
-        # print("[BATCH] no box at conf=0.25, try conf=0.10…")
+        print("[BATCH] no box at conf=0.25, try conf=0.10…")
         res_lo = det_model.predict(
             source=img_rgb, imgsz=640, conf=0.10, iou=0.7,
             device="cpu", verbose=False, half=fp16
@@ -154,7 +155,7 @@ def _run_single_image(img_path: Path, det_model, exp_shape=None, enable_fallback
             yolo_ok = True
         elif enable_fallback:
             # === REMBG fallback ===
-            # print("[BATCH] detection failed — try REMBG fallback…")
+            print("[BATCH] detection failed — try REMBG fallback…")
             crop_rgb = P._fallback_rembg_crop(img_rgb)
             if crop_rgb is None:
                 print("[BATCH] REMBG fallback failed — skip image.")
@@ -162,15 +163,18 @@ def _run_single_image(img_path: Path, det_model, exp_shape=None, enable_fallback
         else:
             return {"text": [], "shape": "", "colors": [], "yolo_ok": False}
 
-    # === 外型（與線上一致：兩個參數都給裁切圖）===
-    shape, _ = detect_shape_from_image(crop_rgb, crop_rgb, expected_shape=exp_shape)
+    # === 外型 + 顏色（使用合併函數）===
+    crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+    shape, colors, hsv_avg, method = scu.detect_shape_and_extract_colors(
+        crop_bgr, crop_bgr, debug=False
+)
 
-    # === 顏色（中心區域 → 主色 → 基本色名；去重保序）===
-    center = get_center_region(crop_rgb.copy(), size=100)
-    rgb_colors, _ = get_dominant_colors(center, k=3, min_ratio=0.30)
-    rgb_colors_int = [tuple(map(int, c)) for c in rgb_colors]
-    basic_names = [get_basic_color_name(rgb) for rgb in rgb_colors_int]
-    colors = list(dict.fromkeys(basic_names))
+    # === 顏色（HSV-based color recognition）===
+    # Convert RGB to BGR for OpenCV processing
+    crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+    colors, hsv_avg, method = scu.extract_pill_colors_hsv(crop_bgr, contour=None, visualize=False)
+    # colors is already a list of Chinese color names like ['白色', '藍色']
+
 
     # === 多版本 OCR（與線上相同 helper）===
     versions = P.generate_image_versions(crop_rgb)
